@@ -26,15 +26,8 @@ func init() {
 	}
 }
 
-var state nodestate.NodeState
-
-// type Role int
-
-// const (
-// 	Leader Role = iota
-// 	Candidate
-// 	Follower
-// )
+var importantState nodestate.ImportantState
+var unimportantState nodestate.UnimportantState
 
 // type Server struct {
 // 	role    Role
@@ -107,16 +100,22 @@ var state nodestate.NodeState
 func main() {
 	fmt.Println("nodeId:", nodeId)
 	if nodestate.CheckStateOnDisk() {
-		state.LoadFromFile()
-		fmt.Printf("state recovered after crash: %+v\n", state)
+		importantState.LoadFromFile()
+		fmt.Printf("state recovered after crash: %+v\n", importantState)
 	} else {
-		state.CurrentTerm = 0
-		state.VotedFor = ""
-		state.Log = nil
-		state.CommitLength = 0
+		importantState.CurrentTerm = 0
+		importantState.VotedFor = ""
+		importantState.Log = nil
+		importantState.CommitLength = 0
 		fmt.Println("initialized new state")
 	}
-	state.SaveToFile()
+	importantState.SaveToFile()
+
+	unimportantState.CurrentRole = nodestate.Follower
+	unimportantState.CurrentLeader = ""
+	unimportantState.VotesRecieved = nil
+	unimportantState.SentLength = nil
+	unimportantState.AckedLength = nil
 
 	// server := &Server{
 	// 	state: Follower,

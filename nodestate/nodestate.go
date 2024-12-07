@@ -10,7 +10,7 @@ type LogEntry struct {
 	Message string
 }
 
-type NodeState struct {
+type ImportantState struct {
 	CurrentTerm  int64
 	VotedFor     string
 	Log          []LogEntry
@@ -29,7 +29,7 @@ func CheckStateOnDisk() bool {
 	return !info.IsDir()
 }
 
-func (n *NodeState) SaveToFile() error {
+func (n *ImportantState) SaveToFile() error {
 	file, err := os.Create(filepath)
 	if err != nil {
 		return err
@@ -40,7 +40,7 @@ func (n *NodeState) SaveToFile() error {
 	return encoder.Encode(n)
 }
 
-func (n *NodeState) LoadFromFile() error {
+func (n *ImportantState) LoadFromFile() error {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return err
@@ -49,4 +49,20 @@ func (n *NodeState) LoadFromFile() error {
 
 	decoder := gob.NewDecoder(file)
 	return decoder.Decode(n)
+}
+
+type Role int
+
+const (
+	Leader Role = iota
+	Candidate
+	Follower
+)
+
+type UnimportantState struct {
+	CurrentRole   Role
+	CurrentLeader string
+	VotesRecieved map[string]struct{}
+	SentLength    map[string]int
+	AckedLength   map[string]int
 }
