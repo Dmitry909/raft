@@ -42,20 +42,6 @@ var mutex sync.Mutex
 // 	// timeout  time.Duration
 // }
 
-// type LogMessage struct {
-// 	term int64
-// 	message string
-// }
-
-// type NodeState struct {
-// 	CurrentTerm int
-// 	VotedFor string
-// 	Log []string
-// 	CommitLength int
-// }
-
-// var isElectionNow := false;
-
 // const electionTime := 1s
 
 // 	startElectionTimer()
@@ -64,7 +50,7 @@ var mutex sync.Mutex
 // func OnElectionTimer() {
 // }
 
-func BecomeCandidateAndStartElection() { // TODO если останется время, то вынести запись на диск и отправку по сети из-под мьютекса.
+func BecomeCandidateAndStartElection() {
 	importantState.CurrentTerm += 1
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
@@ -105,6 +91,7 @@ func CheckLeaderFailurePeriodically() {
 			mutex.Unlock()
 		}
 
+		// fmt.Println("isReallyFollower:", isReallyFollower)
 		if isReallyFollower {
 			time.Sleep(time.Until(unimportantState.LastHeartbeat.Add(suspectLeaderFailureTimeout)))
 		} else {
@@ -144,23 +131,4 @@ func main() {
 	// 	state: Follower,
 	// 	timeout:
 	// }
-
-	// state := nodestate.NodeState{
-	// 	CurrentTerm:  0,
-	// 	VotedFor:     "dSADSFGDG",
-	// 	Log:          []nodestate.LogEntry{{1, "sgdg"}, {4, "fadafeaf"}},
-	// 	CommitLength: 10,
-	// }
-
-	// err := state.SaveToFile("node_state.gob")
-	// if err != nil {
-	// 	log.Fatalf("Ошибка при сохранении: %v", err)
-	// }
-
-	// var loadedState nodestate.NodeState
-	// err = loadedState.LoadFromFile("node_state.gob")
-	// if err != nil {
-	// 	log.Fatalf("Ошибка при загрузке: %v", err)
-	// }
-	// fmt.Printf("Загруженное состояние: %+v\n", loadedState)
 }

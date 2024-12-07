@@ -6,9 +6,18 @@ import (
 	"time"
 )
 
+type OperationType int
+
+const (
+	Write OperationType = iota
+	Delete
+)
+
 type LogEntry struct {
-	Term    int
-	Message string
+	Term       int
+	OperatType OperationType
+	K          string
+	V          string
 }
 
 type ImportantState struct {
