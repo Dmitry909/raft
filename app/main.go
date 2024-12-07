@@ -3,13 +3,19 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"raft/nodestate"
+	"sync"
+	"time"
+
+	"github.com/jinzhu/copier"
 )
 
 var allNodes = [5]string{"localhost:8000", "localhost:8001", "localhost:8002", "localhost:8003", "localhost:8004"}
 var port string
 var nodeId string
+var suspectLeaderFailureTimeout time.Duration
 
 func init() {
 	port = os.Args[1]
@@ -28,14 +34,13 @@ func init() {
 
 var importantState nodestate.ImportantState
 var unimportantState nodestate.UnimportantState
+var mutex sync.Mutex
 
 // type Server struct {
 // 	role    Role
 // 	listener net.Listener
 // 	// timeout  time.Duration
 // }
-
-// var nodes = {"1.2.3.4:6000", "2.3.4.5:6000", "3.4.5.6:6000"}
 
 // type LogMessage struct {
 // 	term int64
@@ -49,53 +54,64 @@ var unimportantState nodestate.UnimportantState
 // 	CommitLength int
 // }
 
-// func ReadFromDisk() NodeState {
-// 	// TODO
-// 	return NodeState{}
-// }
-
-// func WriteToDisk(NodeState state) {
-// 	// TODO
-// }
-
-// var currentRole Role := Follower
-// var currentLeader string := node
-// var votesReceived = {} // set
-// var sentLength := 0
-// var ackedLength := 0
-
 // var isElectionNow := false;
 
 // const electionTime := 1s
-// const nodeId := "1.2.3.4:6000"
-
-// func BecomeCandidateAndStartElection() {
-// 	CurrentTerm++
-// 	currentRole = Candidate
-// 	VotedFor = nodeId
-// 	votesReceived = {nodeId}
-
-// 	lastTerm := len(Log) > 0 : Log.back().term ? 0
-// 	msg := (VoteRequest, nodeId, CurrentTerm, len(Log), lastTerm)
-// 	for (node : nodes) {
-// 		node.send(msg)
-// 	}
 
 // 	startElectionTimer()
 // }
 
 // func OnElectionTimer() {
-
 // }
 
-// func onStartUp() {
-// 	num_messages := 0;
-// 	wait_messages_timeout := rand(1s, 5s);
-// 	wait_messages(wait_messages_timeout, &num_messages);
-// 	if (num_messages == 0) {
-// 		becomeCandidate();
-// 	}
-// }
+func BecomeCandidateAndStartElection() { // TODO если останется время, то вынести запись на диск и отправку по сети из-под мьютекса.
+	importantState.CurrentTerm += 1
+	unimportantState.CurrentRole = nodestate.Candidate
+	importantState.VotedFor = nodeId
+	unimportantState.VotesRecieved = map[string]struct{}{}
+	unimportantState.VotesRecieved[nodeId] = struct{}{}
+
+	importantStateCopy := nodestate.ImportantState{}
+	copier.Copy(&importantStateCopy, &importantState)
+
+	mutex.Unlock()
+
+	importantStateCopy.SaveToFile()
+	// lastTerm := 0
+	// if len(importantStateCopy.Log) > 0 {
+	// 	lastTerm = importantStateCopy.Log[len(importantStateCopy.Log)-1].Term
+	// }
+	// for node := range allNodes {
+	// 	// send http request here
+	// }
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func CheckLeaderFailurePeriodically() {
+	for {
+		mutex.Lock()
+		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower && unimportantState.CurrentLeader != ""
+		suspectFailure := unimportantState.LastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
+		if isReallyFollower && suspectFailure {
+			fmt.Println("suspected leader failure at", time.Now())
+			BecomeCandidateAndStartElection()
+		} else {
+			mutex.Unlock()
+		}
+
+		if isReallyFollower {
+			time.Sleep(time.Until(unimportantState.LastHeartbeat.Add(suspectLeaderFailureTimeout)))
+		} else {
+			time.Sleep(suspectLeaderFailureTimeout)
+		}
+	}
+}
 
 func main() {
 	fmt.Println("nodeId:", nodeId)
@@ -116,6 +132,13 @@ func main() {
 	unimportantState.VotesRecieved = nil
 	unimportantState.SentLength = nil
 	unimportantState.AckedLength = nil
+
+	suspectLeaderFailureTimeout = time.Duration(rand.Intn(450)+50) * time.Millisecond
+	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
+
+	go CheckLeaderFailurePeriodically()
+
+	time.Sleep(1000 * time.Second)
 
 	// server := &Server{
 	// 	state: Follower,

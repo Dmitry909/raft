@@ -3,6 +3,7 @@ package nodestate
 import (
 	"encoding/gob"
 	"os"
+	"time"
 )
 
 type LogEntry struct {
@@ -65,4 +66,5 @@ type UnimportantState struct {
 	VotesRecieved map[string]struct{}
 	SentLength    map[string]int
 	AckedLength   map[string]int
+	LastHeartbeat time.Time
 }
