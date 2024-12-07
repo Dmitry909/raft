@@ -14,7 +14,7 @@ const (
 )
 
 type LogEntry struct {
-	Term       int
+	Term       int64
 	OperatType OperationType
 	K          string
 	V          string

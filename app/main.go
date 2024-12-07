@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"raft/nodestate"
 	"sync"
@@ -13,6 +14,7 @@ import (
 )
 
 var allNodes = [5]string{"localhost:8000", "localhost:8001", "localhost:8002", "localhost:8003", "localhost:8004"}
+var nodesExceptMe = []string{}
 var port string
 var nodeId string
 var suspectLeaderFailureTimeout time.Duration
@@ -24,7 +26,8 @@ func init() {
 	for _, address := range allNodes {
 		if address == nodeId {
 			contains = true
-			break
+		} else {
+			nodesExceptMe = append(nodesExceptMe, address)
 		}
 	}
 	if !contains {
@@ -36,12 +39,6 @@ var importantState nodestate.ImportantState
 var unimportantState nodestate.UnimportantState
 var mutex sync.Mutex
 
-// type Server struct {
-// 	role    Role
-// 	listener net.Listener
-// 	// timeout  time.Duration
-// }
-
 // const electionTime := 1s
 
 // 	startElectionTimer()
@@ -50,7 +47,7 @@ var mutex sync.Mutex
 // func OnElectionTimer() {
 // }
 
-func BecomeCandidateAndStartElection() {
+func BecomeCandidateAndStartElection() { // mutex must be locked
 	importantState.CurrentTerm += 1
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
@@ -83,7 +80,8 @@ func CheckLeaderFailurePeriodically() {
 	for {
 		mutex.Lock()
 		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower && unimportantState.CurrentLeader != ""
-		suspectFailure := unimportantState.LastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
+		lastHeartbeat := unimportantState.LastHeartbeat
+		suspectFailure := lastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
 		if isReallyFollower && suspectFailure {
 			fmt.Println("suspected leader failure at", time.Now())
 			BecomeCandidateAndStartElection()
@@ -93,11 +91,87 @@ func CheckLeaderFailurePeriodically() {
 
 		// fmt.Println("isReallyFollower:", isReallyFollower)
 		if isReallyFollower {
-			time.Sleep(time.Until(unimportantState.LastHeartbeat.Add(suspectLeaderFailureTimeout)))
+			time.Sleep(time.Until(lastHeartbeat.Add(suspectLeaderFailureTimeout)))
 		} else {
 			time.Sleep(suspectLeaderFailureTimeout)
 		}
 	}
+}
+
+func readHandler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	mutex.Lock()
+	if unimportantState.CurrentRole == nodestate.Leader {
+		mutex.Unlock()
+		randomNode := nodesExceptMe[rand.Intn(len(nodesExceptMe))]
+		http.Redirect(w, r, "http://"+randomNode+"/read?key="+key, http.StatusFound)
+		return
+	}
+
+	value := ""
+	for i := len(importantState.Log) - 1; i >= 0; i-- {
+		if importantState.Log[i].K == key {
+			value = importantState.Log[i].V
+			break
+		}
+	}
+	mutex.Unlock()
+	if value == "" {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, value)
+}
+
+func updateHandler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	value := r.URL.Query().Get("value")
+
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	mutex.Lock()
+	if unimportantState.CurrentRole != nodestate.Leader {
+		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+key, http.StatusFound)
+		mutex.Unlock()
+		return
+	}
+
+	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: key, V: value}
+	importantState.Log = append(importantState.Log, newEntry)
+	mutex.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func deleteHandler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	mutex.Lock()
+	if unimportantState.CurrentRole != nodestate.Leader {
+		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+key, http.StatusFound)
+		mutex.Unlock()
+		return
+	}
+
+	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Delete, K: key, V: ""}
+	importantState.Log = append(importantState.Log, newEntry)
+	mutex.Unlock()
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
@@ -125,10 +199,11 @@ func main() {
 
 	go CheckLeaderFailurePeriodically()
 
-	time.Sleep(1000 * time.Second)
+	http.HandleFunc("/read", readHandler)
+	http.HandleFunc("/update", updateHandler)
+	http.HandleFunc("/delete", deleteHandler)
 
-	// server := &Server{
-	// 	state: Follower,
-	// 	timeout:
-	// }
+	if err := http.ListenAndServe(nodeId, nil); err != nil {
+		log.Fatalf("could not start server: %s\n", err)
+	}
 }
