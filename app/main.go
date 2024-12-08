@@ -249,6 +249,44 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var voteResponse requests.VoteResponse
+	err = json.Unmarshal(body, &body)
+	if err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+	fmt.Printf("Received vote response: %+v\n", body)
+
+	voterId := r.RemoteAddr
+	mutex.Lock()
+	if unimportantState.CurrentRole == nodestate.Candidate && voteResponse.Term == importantState.CurrentTerm && voteResponse.Granted {
+		unimportantState.VotesRecieved[voterId] = struct{}{}
+		if len(unimportantState.VotesRecieved) >= (len(allNodes)+1)/2 {
+			unimportantState.CurrentRole = nodestate.Leader
+			unimportantState.CurrentLeader = nodeId
+			// TODO cancel election timer
+			for _, follower := range nodesExceptMe {
+				unimportantState.SentLength[follower] = len(importantState.Log)
+				unimportantState.AckedLength[follower] = 0
+				// ReplicateLog(nodeId, follower)
+			}
+		} else if voteResponse.Term > importantState.CurrentTerm {
+			importantState.CurrentTerm = voteResponse.Term
+			unimportantState.CurrentRole = nodestate.Follower
+			importantState.VotedFor = ""
+			importantState.SaveToFile()
+			// TODO cancel election timer
+		}
+	}
+
+	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
