@@ -75,5 +75,8 @@ type UnimportantState struct {
 	VotesRecieved map[string]struct{}
 	SentLength    map[string]int
 	AckedLength   map[string]int
+
 	LastHeartbeat time.Time
+
+	IsStopped bool
 }

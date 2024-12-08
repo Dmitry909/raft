@@ -121,6 +121,11 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	mutex.Unlock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 	if value == "" {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
@@ -140,6 +145,11 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 	if unimportantState.CurrentRole != nodestate.Leader {
 		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+key, http.StatusFound)
 		mutex.Unlock()
@@ -161,6 +171,11 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 	if unimportantState.CurrentRole != nodestate.Leader {
 		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+key, http.StatusFound)
 		mutex.Unlock()
@@ -171,6 +186,20 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	importantState.Log = append(importantState.Log, newEntry)
 	mutex.Unlock()
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func stopHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	unimportantState.IsStopped = true
+	mutex.Unlock()
+	w.WriteHeader(http.StatusOK)
+}
+
+func recoverHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	unimportantState.IsStopped = false
+	mutex.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -199,9 +228,14 @@ func main() {
 
 	go CheckLeaderFailurePeriodically()
 
+	// user-called handlers
 	http.HandleFunc("/read", readHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/delete", deleteHandler)
+
+	// handlers for testing
+	http.HandleFunc("/stop", stopHandler)
+	http.HandleFunc("/recover", recoverHandler)
 
 	if err := http.ListenAndServe(nodeId, nil); err != nil {
 		log.Fatalf("could not start server: %s\n", err)
