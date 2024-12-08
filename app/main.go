@@ -20,6 +20,7 @@ var nodesExceptMe = []string{}
 var port string
 var nodeId string
 var suspectLeaderFailureTimeout time.Duration
+var electionTimeout time.Duration
 
 func init() {
 	port = os.Args[1]
@@ -51,22 +52,26 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	unimportantState.VotesRecieved = map[string]struct{}{}
 	unimportantState.VotesRecieved[nodeId] = struct{}{}
 
-	var lastTerm int64 = 0
+	var lastTerm int = 0
 	if len(importantState.Log) > 0 {
 		lastTerm = importantState.Log[len(importantState.Log)-1].Term
 	}
 	currentTerm := importantState.CurrentTerm
-	lenLog := len(importantState.Log)
+	logLength := len(importantState.Log)
 	importantState.SaveToFile()
 
 	mutex.Unlock()
 
 	for _, node := range allNodes {
 		fmt.Println("Sending vote request to", node)
-		requests.SendVoteRequest(node+"/vote_request", currentTerm, lenLog, lastTerm)
+		requests.SendVoteRequest(node+"/vote_request", currentTerm, logLength, lastTerm)
 	}
 
-	// TODO start election timer here
+	sleepUntil := time.Now().Add(electionTimeout)
+	go func() {
+		time.Sleep(time.Until(sleepUntil))
+		// TODO on election timeout
+	}()
 }
 
 func minDuration(a, b time.Duration) time.Duration {
@@ -209,14 +214,37 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	var request requests.VoteRequest
-	err = json.Unmarshal(body, &request)
+	var c requests.VoteRequest
+	err = json.Unmarshal(body, &c)
 	if err != nil {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("Received vote request: %+v\n", c)
 
-	fmt.Printf("Received vote request: %+v\n", request)
+	cId := r.RemoteAddr
+	mutex.Lock()
+	myLogTerm := 0
+	if n := len(importantState.Log); n > 0 {
+		myLogTerm = importantState.Log[n-1].Term
+	}
+	logOk := (c.LogTerm > myLogTerm) ||
+		(c.LogTerm == myLogTerm && c.LogLength >= len(importantState.Log))
+	termOk := (c.Term > importantState.CurrentTerm) ||
+		(c.Term == importantState.CurrentTerm && (importantState.VotedFor == cId || importantState.VotedFor == ""))
+
+	if logOk && termOk {
+		importantState.CurrentTerm = c.Term
+		unimportantState.CurrentRole = nodestate.Follower
+		importantState.VotedFor = cId
+		requests.SendVoteResponse(cId, importantState.CurrentTerm, true)
+		importantState.SaveToFile()
+	} else {
+		requests.SendVoteResponse(cId, importantState.CurrentTerm, false)
+	}
+
+	mutex.Unlock()
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -271,6 +299,7 @@ func main() {
 
 	suspectLeaderFailureTimeout = time.Duration(rand.Intn(450)+50) * time.Millisecond
 	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
+	electionTimeout = 2 * suspectLeaderFailureTimeout
 
 	go CheckLeaderFailurePeriodically()
 

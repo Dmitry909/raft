@@ -14,14 +14,14 @@ const (
 )
 
 type LogEntry struct {
-	Term       int64
+	Term       int
 	OperatType OperationType
 	K          string
 	V          string
 }
 
 type ImportantState struct {
-	CurrentTerm  int64
+	CurrentTerm  int
 	VotedFor     string
 	Log          []LogEntry
 	CommitLength int

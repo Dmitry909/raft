@@ -36,5 +36,7 @@ Internal (node-to-node) HTTP-handlers:
 5. `POST log_response`
 
 ```
-curl -X POST http://localhost:8080/vote_request -H "Content-Type: application/json" -d '{"senders_term": 1, "len_log": 10, "log_last_term": 5}'
+curl -X POST http://localhost:8000/vote_request -H "Content-Type: application/json" -d '{"term": 1, "log_length": 10, "log_term": 5}'
+
+curl -X POST http://localhost:8000/vote_response -H "Content-Type: application/json" -d '{"term": 1, "granted": false}'
 ```
