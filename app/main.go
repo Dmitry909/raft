@@ -1,19 +1,21 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"raft/nodestate"
+	"raft/requests"
 	"sync"
 	"time"
-
-	"github.com/jinzhu/copier"
 )
 
-var allNodes = [5]string{"localhost:8000", "localhost:8001", "localhost:8002", "localhost:8003", "localhost:8004"}
+var localIP = "127.0.0.1"
+var allNodes = [5]string{localIP + ":8000", localIP + ":8001", localIP + ":8002", localIP + ":8003", localIP + ":8004"}
 var nodesExceptMe = []string{}
 var port string
 var nodeId string
@@ -21,7 +23,7 @@ var suspectLeaderFailureTimeout time.Duration
 
 func init() {
 	port = os.Args[1]
-	nodeId = "localhost:" + port
+	nodeId = localIP + ":" + port
 	contains := false
 	for _, address := range allNodes {
 		if address == nodeId {
@@ -41,32 +43,30 @@ var mutex sync.Mutex
 
 // const electionTime := 1s
 
-// 	startElectionTimer()
-// }
-
-// func OnElectionTimer() {
-// }
-
 func BecomeCandidateAndStartElection() { // mutex must be locked
+	fmt.Println("Called BecomeCandidateAndStartElection")
 	importantState.CurrentTerm += 1
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
 	unimportantState.VotesRecieved = map[string]struct{}{}
 	unimportantState.VotesRecieved[nodeId] = struct{}{}
 
-	importantStateCopy := nodestate.ImportantState{}
-	copier.Copy(&importantStateCopy, &importantState)
+	var lastTerm int64 = 0
+	if len(importantState.Log) > 0 {
+		lastTerm = importantState.Log[len(importantState.Log)-1].Term
+	}
+	currentTerm := importantState.CurrentTerm
+	lenLog := len(importantState.Log)
+	importantState.SaveToFile()
 
 	mutex.Unlock()
 
-	importantStateCopy.SaveToFile()
-	// lastTerm := 0
-	// if len(importantStateCopy.Log) > 0 {
-	// 	lastTerm = importantStateCopy.Log[len(importantStateCopy.Log)-1].Term
-	// }
-	// for node := range allNodes {
-	// 	// send http request here
-	// }
+	for _, node := range allNodes {
+		fmt.Println("Sending vote request to", node)
+		requests.SendVoteRequest(node+"/vote_request", currentTerm, lenLog, lastTerm)
+	}
+
+	// TODO start election timer here
 }
 
 func minDuration(a, b time.Duration) time.Duration {
@@ -189,6 +189,52 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	heartbeatSender := r.RemoteAddr
+	time := time.Now()
+	fmt.Println("heartbeat recieved from", heartbeatSender, "at", time)
+	mutex.Lock()
+	if heartbeatSender == unimportantState.CurrentLeader {
+		unimportantState.LastHeartbeat = time
+	}
+	mutex.Unlock()
+	w.WriteHeader(http.StatusOK)
+}
+
+func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var request requests.VoteRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+
+	fmt.Printf("Received vote request: %+v\n", request)
+	w.WriteHeader(http.StatusOK)
+}
+
+func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func logRequestHandler(w http.ResponseWriter, r *http.Request) {
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func logResponseHandler(w http.ResponseWriter, r *http.Request) {
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func stopHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	unimportantState.IsStopped = true
@@ -232,6 +278,13 @@ func main() {
 	http.HandleFunc("/read", readHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/delete", deleteHandler)
+
+	// handlers for node-to-node communication
+	http.HandleFunc("/heartbeat", heartbeatHandler)
+	http.HandleFunc("/vote_request", voteRequestHandler)
+	http.HandleFunc("/vote_response", voteResponseHandler)
+	http.HandleFunc("/log_request", logRequestHandler)
+	http.HandleFunc("/log_response", logResponseHandler)
 
 	// handlers for testing
 	http.HandleFunc("/stop", stopHandler)
