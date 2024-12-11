@@ -21,6 +21,7 @@ var port string
 var nodeId string
 var suspectLeaderFailureTimeout time.Duration
 var electionTimeout time.Duration
+var replicateTimeout time.Duration
 
 func init() {
 	port = os.Args[1]
@@ -64,7 +65,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 
 	for _, node := range allNodes {
 		fmt.Println("Sending vote request to", node)
-		requests.SendVoteRequest(node+"/vote_request", currentTerm, logLength, lastTerm)
+		requests.SendVoteRequest(node, currentTerm, logLength, lastTerm)
 	}
 
 	sleepUntil := time.Now().Add(electionTimeout)
@@ -100,6 +101,32 @@ func CheckLeaderFailurePeriodically() {
 		} else {
 			time.Sleep(suspectLeaderFailureTimeout)
 		}
+	}
+}
+
+func ReplicateLog(leaderId string, followerId string) {
+	mutex.Lock()
+	i := unimportantState.SentLength[followerId]
+	entries := importantState.Log[i:]
+	prevLogTerm := 0
+	if i > 0 {
+		prevLogTerm = importantState.Log[i-1].Term
+	}
+	requests.SendLogRequest(followerId, importantState.CurrentTerm, i, prevLogTerm, importantState.CommitLength, entries) // TODO(daterenichev) а здесь точно i, а не n-i?
+	// TODO(daterenichev) в этой функции и соседних анлочить мьютекс до http-вызова.
+	mutex.Unlock()
+}
+
+func ReplicateLogPeriodically() {
+	for {
+		mutex.Lock()
+		if unimportantState.CurrentRole == nodestate.Leader {
+			for _, follower := range nodesExceptMe {
+				ReplicateLog(nodeId, follower)
+			}
+		}
+		mutex.Unlock()
+		time.Sleep(replicateTimeout)
 	}
 }
 
@@ -163,6 +190,10 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: key, V: value}
 	importantState.Log = append(importantState.Log, newEntry)
+	unimportantState.AckedLength[nodeId] = len(importantState.Log)
+	for _, follower := range nodesExceptMe {
+		ReplicateLog(nodeId, follower)
+	}
 	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
@@ -194,17 +225,18 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
-	heartbeatSender := r.RemoteAddr
-	time := time.Now()
-	fmt.Println("heartbeat recieved from", heartbeatSender, "at", time)
-	mutex.Lock()
-	if heartbeatSender == unimportantState.CurrentLeader {
-		unimportantState.LastHeartbeat = time
-	}
-	mutex.Unlock()
-	w.WriteHeader(http.StatusOK)
-}
+// TODO вроде хартбиты не нужны, их заменяет log_request.
+// func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
+// 	heartbeatSender := r.RemoteAddr
+// 	time := time.Now()
+// 	fmt.Println("heartbeat recieved from", heartbeatSender, "at", time)
+// 	mutex.Lock()
+// 	if heartbeatSender == unimportantState.CurrentLeader {
+// 		unimportantState.LastHeartbeat = time
+// 	}
+// 	mutex.Unlock()
+// 	w.WriteHeader(http.StatusOK)
+// }
 
 func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
@@ -257,12 +289,12 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var voteResponse requests.VoteResponse
-	err = json.Unmarshal(body, &body)
+	err = json.Unmarshal(body, &voteResponse)
 	if err != nil {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote response: %+v\n", body)
+	fmt.Printf("Received vote response: %+v\n", voteResponse)
 
 	voterId := r.RemoteAddr
 	mutex.Lock()
@@ -275,7 +307,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 			for _, follower := range nodesExceptMe {
 				unimportantState.SentLength[follower] = len(importantState.Log)
 				unimportantState.AckedLength[follower] = 0
-				// ReplicateLog(nodeId, follower)
+				ReplicateLog(nodeId, follower)
 			}
 		} else if voteResponse.Term > importantState.CurrentTerm {
 			importantState.CurrentTerm = voteResponse.Term
@@ -292,6 +324,22 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logRequestHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var logRequest requests.LogRequest
+	err = json.Unmarshal(body, &logRequest)
+	if err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+	fmt.Printf("Received vote response: %+v\n", logRequest)
+
+	// TODO continue
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -338,6 +386,7 @@ func main() {
 	suspectLeaderFailureTimeout = time.Duration(rand.Intn(450)+50) * time.Millisecond
 	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
 	electionTimeout = 2 * suspectLeaderFailureTimeout
+	replicateTimeout = 2 * suspectLeaderFailureTimeout
 
 	go CheckLeaderFailurePeriodically()
 
@@ -347,7 +396,7 @@ func main() {
 	http.HandleFunc("/delete", deleteHandler)
 
 	// handlers for node-to-node communication
-	http.HandleFunc("/heartbeat", heartbeatHandler)
+	// http.HandleFunc("/heartbeat", heartbeatHandler)
 	http.HandleFunc("/vote_request", voteRequestHandler)
 	http.HandleFunc("/vote_response", voteResponseHandler)
 	http.HandleFunc("/log_request", logRequestHandler)

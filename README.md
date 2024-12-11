@@ -26,14 +26,22 @@ curl -i -X PUT "http://localhost:8000/delete?key=key1"
 ```
 
 Internal (node-to-node) HTTP-handlers:
-1. `POST heartbeat`
-2. `POST vote_request`. Body contains:
+1. `POST vote_request`. Body contains:
     - sender's term
-    - len(log)
+    - log length
     - log's last term (or 0, if log is empty)
-3. `POST vote_response`
-4. `POST log_request`
-5. `POST log_response`
+2. `POST vote_response`
+    - term
+    - granted (true/false)
+3. `POST log_request`
+    -term
+    -logLength
+    -logTerm
+    -leaderCommit
+    -entries
+4. `POST log_response`
+    -
+    -
 
 ```
 curl -X POST http://localhost:8000/vote_request -H "Content-Type: application/json" -d '{"term": 1, "log_length": 10, "log_term": 5}'
