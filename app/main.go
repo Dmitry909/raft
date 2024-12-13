@@ -55,21 +55,29 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	if len(importantState.Log) > 0 {
 		lastTerm = importantState.Log[len(importantState.Log)-1].Term
 	}
-	currentTerm := importantState.CurrentTerm
+	termBeforeElection := importantState.CurrentTerm
 	logLength := len(importantState.Log)
 	importantState.SaveToFile()
 
+	unimportantState.ElectionIteration++
+	electionIterationBefore := unimportantState.ElectionIteration
 	mutex.Unlock()
 
 	for _, node := range allNodes {
 		fmt.Println("Sending vote request to", node)
-		requests.SendVoteRequest(node, currentTerm, logLength, lastTerm)
+		requests.SendVoteRequest(node, termBeforeElection, logLength, lastTerm)
 	}
 
 	sleepUntil := time.Now().Add(electionTimeout)
 	go func() {
 		time.Sleep(time.Until(sleepUntil))
-		// TODO on election timeout
+		mutex.Lock()
+		if unimportantState.ElectionIteration == electionIterationBefore && importantState.CurrentTerm == termBeforeElection && unimportantState.CurrentRole == nodestate.Candidate {
+			mutex.Unlock()
+			BecomeCandidateAndStartElection()
+		} else {
+			mutex.Unlock()
+		}
 	}()
 }
 
@@ -110,8 +118,8 @@ func ReplicateLog(leaderId string, followerId string) {
 	if i > 0 {
 		prevLogTerm = importantState.Log[i-1].Term
 	}
-	requests.SendLogRequest(followerId, importantState.CurrentTerm, i, prevLogTerm, importantState.CommitLength, entries) // TODO(daterenichev) а здесь точно i, а не n-i?
-	// TODO(daterenichev) в этой функции и соседних анлочить мьютекс до http-вызова.
+	requests.SendLogRequest(followerId, importantState.CurrentTerm, i, prevLogTerm, importantState.CommitLength, entries) // TODO а здесь точно i, а не n-i?
+	// TODO в этой функции и соседних анлочить мьютекс до http-вызова.
 	mutex.Unlock()
 }
 
@@ -324,7 +332,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 		if len(unimportantState.VotesRecieved) >= (len(allNodes)+1)/2 {
 			unimportantState.CurrentRole = nodestate.Leader
 			unimportantState.CurrentLeader = nodeId
-			// TODO cancel election timer
+			unimportantState.ElectionIteration++ // cancel election
 			for _, follower := range nodesExceptMe {
 				unimportantState.SentLength[follower] = len(importantState.Log)
 				unimportantState.AckedLength[follower] = 0
@@ -335,7 +343,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 			unimportantState.CurrentRole = nodestate.Follower
 			importantState.VotedFor = ""
 			importantState.SaveToFile()
-			// TODO cancel election timer
+			unimportantState.ElectionIteration++ // cancel election
 		}
 	}
 
@@ -487,6 +495,8 @@ func main() {
 	unimportantState.VotesRecieved = nil
 	unimportantState.SentLength = nil
 	unimportantState.AckedLength = nil
+	unimportantState.ElectionIteration = 0
+	unimportantState.IsStopped = false
 
 	suspectLeaderFailureTimeout = time.Duration(rand.Intn(450)+50) * time.Millisecond
 	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
