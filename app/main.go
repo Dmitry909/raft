@@ -192,8 +192,12 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, value)
+	response := requests.Read{Value: value}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
@@ -462,6 +466,28 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func currentRoleHandler(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	currentRole := unimportantState.CurrentRole
+	mutex.Unlock()
+
+	response := requests.CurrentRole{}
+	if currentRole == nodestate.Leader {
+		response.Role = "leader"
+	} else if currentRole == nodestate.Candidate {
+		response.Role = "candidate"
+	} else {
+		response.Role = "follower"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func stopHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	unimportantState.IsStopped = true
@@ -518,6 +544,7 @@ func main() {
 	http.HandleFunc("/log_response", logResponseHandler)
 
 	// handlers for testing
+	http.HandleFunc("/current_role", currentRoleHandler)
 	http.HandleFunc("/stop", stopHandler)
 	http.HandleFunc("/recover", recoverHandler)
 

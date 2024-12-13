@@ -48,6 +48,14 @@ type LogResponse struct {
 	Success bool `json:"success"`
 }
 
+type Read struct {
+	Value string `json:"value"`
+}
+
+type CurrentRole struct {
+	Role string `json:"role"`
+}
+
 func SendVoteRequest(recipient string, term int, logLength int, logTerm int) {
 	voteRequest := map[string]interface{}{
 		"term":       term,

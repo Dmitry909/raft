@@ -48,3 +48,9 @@ curl -X POST http://localhost:8000/vote_request -H "Content-Type: application/js
 
 curl -X POST http://localhost:8000/vote_response -H "Content-Type: application/json" -d '{"term": 1, "granted": false}'
 ```
+
+Testing HTTP-handlers:
+1. `GET current_role`:
+    - example return: {"current_role": "leader"}
+2. `POST stop`
+3. `POST recover`
