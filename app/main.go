@@ -43,8 +43,6 @@ var importantState nodestate.ImportantState
 var unimportantState nodestate.UnimportantState
 var mutex sync.Mutex
 
-// const electionTime := 1s
-
 func BecomeCandidateAndStartElection() { // mutex must be locked
 	fmt.Println("Called BecomeCandidateAndStartElection")
 	importantState.CurrentTerm += 1
@@ -127,6 +125,29 @@ func ReplicateLogPeriodically() {
 		}
 		mutex.Unlock()
 		time.Sleep(replicateTimeout)
+	}
+}
+
+func deliverMessage(i int) {
+	fmt.Println("DELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
+}
+
+func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) {
+	if len(entries) > 0 && len(importantState.Log) > logLength {
+		if importantState.Log[logLength].Term != entries[0].Term {
+			importantState.Log = importantState.Log[:logLength]
+		}
+	}
+	if logLength+len(entries) > len(importantState.Log) {
+		for i := len(importantState.Log) - logLength; i < len(entries); i++ {
+			importantState.Log = append(importantState.Log, entries[i])
+		}
+	}
+	if leaderCommit > importantState.CommitLength {
+		for i := importantState.CommitLength; i < leaderCommit; i++ {
+			deliverMessage(i)
+		}
+		importantState.CommitLength = leaderCommit
 	}
 }
 
@@ -339,12 +360,96 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("Received vote response: %+v\n", logRequest)
 
-	// TODO continue
+	leaderId := r.RemoteAddr
+	mutex.Lock()
+	if logRequest.Term > importantState.CurrentTerm {
+		importantState.CurrentTerm = logRequest.Term
+		importantState.VotedFor = ""
+		unimportantState.CurrentRole = nodestate.Follower
+		unimportantState.CurrentLeader = leaderId
+	}
+	if logRequest.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Candidate {
+		unimportantState.CurrentRole = nodestate.Follower
+		unimportantState.CurrentLeader = leaderId
+	}
+	logOk := (len(importantState.Log) >= logRequest.LogLength) &&
+		(logRequest.LogLength == 0 || logRequest.LogTerm == importantState.Log[len(importantState.Log)-1].Term)
+	if logRequest.Term == importantState.CurrentTerm && logOk {
+		AppendEntries(logRequest.LogLength, logRequest.LeaderCommit, logRequest.Entries)
+		ack := logRequest.LogLength + len(logRequest.Entries)
+		requests.SendLogResponse(leaderId, importantState.CurrentTerm, ack, true)
+	} else {
+		requests.SendLogResponse(leaderId, importantState.CurrentTerm, 0, false)
+	}
+
+	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
 
+func acks(length int) int {
+	result := 0
+	for _, n := range allNodes {
+		if unimportantState.AckedLength[n] >= length {
+			result++
+		}
+	}
+	return result
+}
+
+func findMaxReady(minAcks int) int {
+	for i := len(importantState.Log); i >= 0; i-- {
+		if acks(i) >= minAcks {
+			return i
+		}
+	}
+	return -1
+}
+
+func CommitLogEntries() {
+	minAcks := (len(allNodes) + 2) / 2 // TODO точно +2? (+1 просто + округлуние вверх, поэтому еще +1). Короче зависит от того, учитываем ли себя
+	maxReady := findMaxReady(minAcks)
+	if maxReady > importantState.CommitLength && importantState.Log[maxReady-1].Term == importantState.CurrentTerm {
+		for i := importantState.CommitLength; i < maxReady-1; i++ {
+			deliverMessage(i)
+		}
+		importantState.CommitLength = maxReady
+	}
+}
+
 func logResponseHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var logResponse requests.LogResponse
+	err = json.Unmarshal(body, &logResponse)
+	if err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+	fmt.Printf("Received vote response: %+v\n", logResponse)
+
+	follower := r.RemoteAddr
+	mutex.Lock()
+	if logResponse.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Leader {
+		if logResponse.Success && logResponse.Ack >= unimportantState.AckedLength[follower] {
+			unimportantState.SentLength[follower] = logResponse.Ack
+			unimportantState.AckedLength[follower] = logResponse.Ack
+			CommitLogEntries()
+		} else if unimportantState.SentLength[follower] > 0 { // TODO here maybe add "!logResponse.Success" (8 slide)
+			unimportantState.SentLength[follower] = unimportantState.SentLength[follower] - 1 // TODO here maybe x2 increase
+			ReplicateLog(nodeId, follower)
+		}
+	} else if logResponse.Term > importantState.CurrentTerm {
+		importantState.CurrentTerm = logResponse.Term
+		unimportantState.CurrentRole = nodestate.Follower
+		importantState.VotedFor = ""
+	}
+	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
