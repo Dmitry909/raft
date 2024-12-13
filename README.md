@@ -2,7 +2,9 @@
 
 From root run:
 ```
-go run app/main.go 8000
+go run app/main.go 8000 "8000,8001,8002" 500
+go run app/main.go 8001 "8000,8001,8002" 1000
+go run app/main.go 8002 "8000,8001,8002" 1500
 ```
 
 External (user's) HTTP-handlers:

@@ -10,12 +10,13 @@ import (
 	"os"
 	"raft/nodestate"
 	"raft/requests"
+	"raft/util"
+	"strconv"
 	"sync"
 	"time"
 )
 
-var localIP = "127.0.0.1"
-var allNodes = [5]string{localIP + ":8000", localIP + ":8001", localIP + ":8002", localIP + ":8003", localIP + ":8004"}
+var allNodes = []string{}
 var nodesExceptMe = []string{}
 var port string
 var nodeId string
@@ -25,7 +26,10 @@ var replicateTimeout time.Duration
 
 func init() {
 	port = os.Args[1]
-	nodeId = localIP + ":" + port
+	nodeId = util.LocalIP + ":" + port
+
+	allNodes = util.ConvertPortsToSlice(os.Args[2])
+
 	contains := false
 	for _, address := range allNodes {
 		if address == nodeId {
@@ -37,6 +41,12 @@ func init() {
 	if !contains {
 		log.Fatal("Wrong port " + port)
 	}
+
+	num, _ := strconv.Atoi(os.Args[3])
+	suspectLeaderFailureTimeout = time.Duration(num) * time.Millisecond
+	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
+	electionTimeout = 2 * suspectLeaderFailureTimeout
+	replicateTimeout = 2 * suspectLeaderFailureTimeout
 }
 
 var importantState nodestate.ImportantState
@@ -523,11 +533,6 @@ func main() {
 	unimportantState.AckedLength = nil
 	unimportantState.ElectionIteration = 0
 	unimportantState.IsStopped = false
-
-	suspectLeaderFailureTimeout = time.Duration(rand.Intn(450)+50) * time.Millisecond
-	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
-	electionTimeout = 2 * suspectLeaderFailureTimeout
-	replicateTimeout = 2 * suspectLeaderFailureTimeout
 
 	go CheckLeaderFailurePeriodically()
 
