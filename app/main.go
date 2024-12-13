@@ -508,12 +508,6 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 func recoverHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	unimportantState.IsStopped = false
-	mutex.Unlock()
-	w.WriteHeader(http.StatusOK)
-}
-
-func main() {
-	fmt.Println("nodeId:", nodeId)
 	if nodestate.CheckStateOnDisk() {
 		importantState.LoadFromFile()
 		fmt.Printf("state recovered after crash: %+v\n", importantState)
@@ -524,6 +518,17 @@ func main() {
 		importantState.CommitLength = 0
 		fmt.Println("initialized new state")
 	}
+	mutex.Unlock()
+	w.WriteHeader(http.StatusOK)
+}
+
+func main() {
+	fmt.Println("nodeId:", nodeId)
+	importantState.CurrentTerm = 0
+	importantState.VotedFor = ""
+	importantState.Log = nil
+	importantState.CommitLength = 0
+	fmt.Println("initialized new state")
 	importantState.SaveToFile()
 
 	unimportantState.CurrentRole = nodestate.Follower
