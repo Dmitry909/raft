@@ -230,7 +230,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote request: %+v\n", request)
+	fmt.Printf("Received update request: %+v\n", request)
 
 	if request.Key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)

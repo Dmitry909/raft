@@ -36,18 +36,18 @@ class T(unittest.TestCase):
         assert code == 404
         assert value == ""
         
-        # client.update("key1", "value1")
-        # _, value = client.read("key1")
-        # assert value == "value1"
-        # client.update("key1", "value2")
-        # _, value = client.read("key1")
-        # assert value == "value2"
+        client.update("key1", "value1")
+        _, value = client.read("key1")
+        assert value == "value1"
+        client.update("key1", "value2")
+        _, value = client.read("key1")
+        assert value == "value2"
 
-        # client.update("key2", "value10")
-        # _, value = client.read("key1")
-        # assert value == "value2"
-        # _, value = client.read("key2")
-        # assert value == "value10"
+        client.update("key2", "value10")
+        _, value = client.read("key1")
+        assert value == "value2"
+        _, value = client.read("key2")
+        assert value == "value10"
 
         # client.delete("")
 

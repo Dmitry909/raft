@@ -15,7 +15,11 @@ class RaftClient:
             return response.status_code, ""
 
     def update(self, key, value):
-        response = requests.post(self.node + "/update?key=" + key + "&value=" + value)
+        data = {
+            "key": key,
+            "value": value
+        }
+        response = requests.post(self.node + "/update", json=data)
         if response.status_code != 200:
             raise Exception("update failed")
 
