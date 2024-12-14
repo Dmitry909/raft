@@ -27,10 +27,10 @@ type ImportantState struct {
 	CommitLength int
 }
 
-var filepath string = "state"
+var filepath string = "state_"
 
-func CheckStateOnDisk() bool {
-	info, err := os.Stat(filepath)
+func CheckStateOnDisk(port string) bool {
+	info, err := os.Stat(filepath + port)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false
@@ -39,8 +39,8 @@ func CheckStateOnDisk() bool {
 	return !info.IsDir()
 }
 
-func (n *ImportantState) SaveToFile() error {
-	file, err := os.Create(filepath)
+func (n *ImportantState) SaveToFile(port string) error {
+	file, err := os.Create(filepath + port)
 	if err != nil {
 		return err
 	}
@@ -50,8 +50,8 @@ func (n *ImportantState) SaveToFile() error {
 	return encoder.Encode(n)
 }
 
-func (n *ImportantState) LoadFromFile() error {
-	file, err := os.Open(filepath)
+func (n *ImportantState) LoadFromFile(port string) error {
+	file, err := os.Open(filepath + port)
 	if err != nil {
 		return err
 	}

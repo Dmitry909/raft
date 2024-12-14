@@ -68,7 +68,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	}
 	termBeforeElection := importantState.CurrentTerm
 	logLength := len(importantState.Log)
-	importantState.SaveToFile()
+	importantState.SaveToFile(port)
 
 	unimportantState.ElectionIteration++
 	electionIterationBefore := unimportantState.ElectionIteration
@@ -339,7 +339,7 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.VotedFor = cId
 		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, &mutex)
 		mutex.Lock()
-		importantState.SaveToFile()
+		importantState.SaveToFile(port)
 		mutex.Unlock()
 	} else {
 		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, false, &mutex)
@@ -387,7 +387,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 			importantState.CurrentTerm = voteResponse.Term
 			unimportantState.CurrentRole = nodestate.Follower
 			importantState.VotedFor = ""
-			importantState.SaveToFile()
+			importantState.SaveToFile(port)
 			unimportantState.ElectionIteration++ // cancel election
 		}
 	}
@@ -537,8 +537,8 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 func recoverHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	unimportantState.IsStopped = false
-	if nodestate.CheckStateOnDisk() {
-		importantState.LoadFromFile()
+	if nodestate.CheckStateOnDisk(port) {
+		importantState.LoadFromFile(port)
 		fmt.Printf("state recovered after crash: %+v\n", importantState)
 	} else {
 		importantState.CurrentTerm = 0
@@ -558,7 +558,7 @@ func main() {
 	importantState.Log = nil
 	importantState.CommitLength = 0
 	fmt.Println("initialized new state")
-	importantState.SaveToFile()
+	importantState.SaveToFile(port)
 
 	unimportantState.CurrentRole = nodestate.Follower
 	unimportantState.CurrentLeader = ""
