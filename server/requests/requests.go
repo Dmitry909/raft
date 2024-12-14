@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"raft/nodestate"
 )
 
-func sendRequest(address string, request map[string]interface{}) {
+func sendRequest(address string, request map[string]interface{}, mutex *sync.Mutex) {
 	payload, err := json.Marshal(request)
+	if mutex != nil {
+		(*mutex).Unlock()
+	}
 	if err != nil {
 		fmt.Println("Error marshalling JSON:", err)
 		return
@@ -24,28 +28,32 @@ func sendRequest(address string, request map[string]interface{}) {
 }
 
 type VoteRequest struct {
-	Term      int `json:"term"`
-	LogLength int `json:"log_length"`
-	LogTerm   int `json:"log_term"`
+	SenderAddress string `json:"sender_address"`
+	Term          int    `json:"term"`
+	LogLength     int    `json:"log_length"`
+	LogTerm       int    `json:"log_term"`
 }
 
 type VoteResponse struct {
-	Term    int  `json:"term"`
-	Granted bool `json:"granted"`
+	SenderAddress string `json:"sender_address"`
+	Term          int    `json:"term"`
+	Granted       bool   `json:"granted"`
 }
 
 type LogRequest struct {
-	Term         int                  `json:"term"`
-	LogLength    int                  `json:"logLength"`
-	LogTerm      int                  `json:"logTerm"`
-	LeaderCommit int                  `json:"leaderCommit"`
-	Entries      []nodestate.LogEntry `json:"entries"`
+	SenderAddress string               `json:"sender_address"`
+	Term          int                  `json:"term"`
+	LogLength     int                  `json:"logLength"`
+	LogTerm       int                  `json:"logTerm"`
+	LeaderCommit  int                  `json:"leaderCommit"`
+	Entries       []nodestate.LogEntry `json:"entries"`
 }
 
 type LogResponse struct {
-	Term    int  `json:"term"`
-	Ack     int  `json:"ack"`
-	Success bool `json:"success"`
+	SenderAddress string `json:"sender_address"`
+	Term          int    `json:"term"`
+	Ack           int    `json:"ack"`
+	Success       bool   `json:"success"`
 }
 
 type Read struct {
@@ -56,39 +64,52 @@ type CurrentRole struct {
 	Role string `json:"role"`
 }
 
-func SendVoteRequest(recipient string, term int, logLength int, logTerm int) {
+type UpdateRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func SendVoteRequest(sender_address string, recipient string, term int, logLength int, logTerm int) {
 	voteRequest := map[string]interface{}{
-		"term":       term,
-		"log_length": logLength,
-		"log_term":   logTerm,
+		"sender_address": sender_address,
+		"term":           term,
+		"log_length":     logLength,
+		"log_term":       logTerm,
 	}
-	sendRequest(recipient+"vote_request", voteRequest)
+	sendRequest("http://"+recipient+"/vote_request", voteRequest, nil)
 }
 
-func SendVoteResponse(recipient string, term int, granted bool) {
+func SendVoteResponse(sender_address string, recipient string, term int, granted bool, mutex *sync.Mutex) {
+	if mutex != nil {
+		(*mutex).Unlock()
+	}
 	voteResponse := map[string]interface{}{
-		"term":    term,
-		"granted": granted,
+		"sender_address": sender_address,
+		"term":           term,
+		"granted":        granted,
 	}
-	sendRequest(recipient+"vote_response", voteResponse)
+	sendRequest("http://"+recipient+"/vote_response", voteResponse, nil)
 }
 
-func SendLogRequest(recipient string, term, logLength, logTerm, leaderCommit int, entries []nodestate.LogEntry) {
+func SendLogRequest(sender_address string, recipient string, term, logLength, logTerm, leaderCommit int, entries []nodestate.LogEntry, mutex *sync.Mutex) {
 	logRequest := map[string]interface{}{
-		"term":         term,
-		"logLength":    logLength,
-		"logTerm":      logTerm,
-		"leaderCommit": leaderCommit,
-		"entries":      entries,
+		"sender_address": sender_address,
+		"term":           term,
+		"logLength":      logLength,
+		"logTerm":        logTerm,
+		"leaderCommit":   leaderCommit,
+		"entries":        entries,
 	}
-	sendRequest(recipient+"/log_request", logRequest)
+	sendRequest("http://"+recipient+"/log_request", logRequest, mutex)
 }
 
-func SendLogResponse(recipient string, term int, ack int, success bool) {
+func SendLogResponse(sender_address string, recipient string, term int, ack int, success bool, mutex *sync.Mutex) {
+	(*mutex).Unlock()
 	logResponse := map[string]interface{}{
-		"term":    term,
-		"ack":     ack,
-		"success": success,
+		"sender_address": sender_address,
+		"term":           term,
+		"ack":            ack,
+		"success":        success,
 	}
-	sendRequest(recipient+"/log_response", logResponse)
+	sendRequest("http://"+recipient+"/log_response", logResponse, nil)
 }

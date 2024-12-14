@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"raft/nodestate"
@@ -58,8 +57,10 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	importantState.CurrentTerm += 1
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
-	unimportantState.VotesRecieved = map[string]struct{}{}
+	unimportantState.VotesRecieved = make(map[string]struct{})
 	unimportantState.VotesRecieved[nodeId] = struct{}{}
+	unimportantState.SentLength = make(map[string]int)
+	unimportantState.AckedLength = make(map[string]int)
 
 	var lastTerm int = 0
 	if len(importantState.Log) > 0 {
@@ -75,7 +76,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 
 	for _, node := range allNodes {
 		fmt.Println("Sending vote request to", node)
-		requests.SendVoteRequest(node, termBeforeElection, logLength, lastTerm)
+		requests.SendVoteRequest(nodeId, node, termBeforeElection, logLength, lastTerm)
 	}
 
 	sleepUntil := time.Now().Add(electionTimeout)
@@ -83,7 +84,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 		time.Sleep(time.Until(sleepUntil))
 		mutex.Lock()
 		if unimportantState.ElectionIteration == electionIterationBefore && importantState.CurrentTerm == termBeforeElection && unimportantState.CurrentRole == nodestate.Candidate {
-			mutex.Unlock()
+			// mutex must be locked before call
 			BecomeCandidateAndStartElection()
 		} else {
 			mutex.Unlock()
@@ -99,11 +100,14 @@ func minDuration(a, b time.Duration) time.Duration {
 }
 
 func CheckLeaderFailurePeriodically() {
+	time.Sleep(suspectLeaderFailureTimeout)
 	for {
 		mutex.Lock()
-		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower && unimportantState.CurrentLeader != ""
+		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower // && unimportantState.CurrentLeader != ""
 		lastHeartbeat := unimportantState.LastHeartbeat
+		fmt.Println(isReallyFollower, lastHeartbeat)
 		suspectFailure := lastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
+
 		if isReallyFollower && suspectFailure {
 			fmt.Println("suspected leader failure at", time.Now())
 			BecomeCandidateAndStartElection()
@@ -128,9 +132,7 @@ func ReplicateLog(leaderId string, followerId string) {
 	if i > 0 {
 		prevLogTerm = importantState.Log[i-1].Term
 	}
-	requests.SendLogRequest(followerId, importantState.CurrentTerm, i, prevLogTerm, importantState.CommitLength, entries) // TODO а здесь точно i, а не n-i?
-	// TODO в этой функции и соседних анлочить мьютекс до http-вызова.
-	mutex.Unlock()
+	requests.SendLogRequest(nodeId, followerId, importantState.CurrentTerm, i, prevLogTerm, importantState.CommitLength, entries, &mutex) // TODO а здесь точно i, а не n-i?
 }
 
 func ReplicateLogPeriodically() {
@@ -170,19 +172,21 @@ func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) {
 }
 
 func readHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("readHandler called")
 	key := r.URL.Query().Get("key")
+	fmt.Println("\tkey=", key)
 	if key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
 	}
 
 	mutex.Lock()
-	if unimportantState.CurrentRole == nodestate.Leader {
-		mutex.Unlock()
-		randomNode := nodesExceptMe[rand.Intn(len(nodesExceptMe))]
-		http.Redirect(w, r, "http://"+randomNode+"/read?key="+key, http.StatusFound)
-		return
-	}
+	// if unimportantState.CurrentRole == nodestate.Leader {
+	// 	mutex.Unlock()
+	// 	randomNode := nodesExceptMe[rand.Intn(len(nodesExceptMe))]
+	// 	http.Redirect(w, r, "http://"+randomNode+"/read?key="+key, http.StatusFound)
+	// 	return
+	// }
 
 	value := ""
 	for i := len(importantState.Log) - 1; i >= 0; i-- {
@@ -211,10 +215,24 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
-	value := r.URL.Query().Get("value")
+	fmt.Println("updateHandler called")
 
-	if key == "" {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var request requests.UpdateRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+	fmt.Printf("Received vote request: %+v\n", request)
+
+	if request.Key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
 	}
@@ -226,12 +244,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if unimportantState.CurrentRole != nodestate.Leader {
-		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+key, http.StatusFound)
+		http.Redirect(w, r, "http://"+unimportantState.CurrentLeader+"/read?key="+request.Key, http.StatusFound)
 		mutex.Unlock()
 		return
 	}
 
-	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: key, V: value}
+	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: request.Key, V: request.Value}
 	importantState.Log = append(importantState.Log, newEntry)
 	unimportantState.AckedLength[nodeId] = len(importantState.Log)
 	for _, follower := range nodesExceptMe {
@@ -270,7 +288,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 
 // TODO вроде хартбиты не нужны, их заменяет log_request.
 // func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
-// 	heartbeatSender := r.RemoteAddr
+// 	heartbeatSender := .SenderAddress
 // 	time := time.Now()
 // 	fmt.Println("heartbeat recieved from", heartbeatSender, "at", time)
 // 	mutex.Lock()
@@ -282,6 +300,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 // }
 
 func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("voteRequestHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -297,7 +316,13 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("Received vote request: %+v\n", c)
 
-	cId := r.RemoteAddr
+	cId := c.SenderAddress
+	if cId == nodeId {
+		fmt.Println("\tcId == nodeId, vote for myself")
+		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, nil)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	mutex.Lock()
 	myLogTerm := 0
 	if n := len(importantState.Log); n > 0 {
@@ -312,18 +337,19 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.CurrentTerm = c.Term
 		unimportantState.CurrentRole = nodestate.Follower
 		importantState.VotedFor = cId
-		requests.SendVoteResponse(cId, importantState.CurrentTerm, true)
+		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, &mutex)
+		mutex.Lock()
 		importantState.SaveToFile()
+		mutex.Unlock()
 	} else {
-		requests.SendVoteResponse(cId, importantState.CurrentTerm, false)
+		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, false, &mutex)
 	}
-
-	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
 
 func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("voteResponseHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -339,10 +365,15 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("Received vote response: %+v\n", voteResponse)
 
-	voterId := r.RemoteAddr
+	voterId := voteResponse.SenderAddress
+	fmt.Println("\tvoterId: ", voterId)
 	mutex.Lock()
+
+	fmt.Println("\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
+	fmt.Println("\t", voteResponse.Term, importantState.CurrentTerm)
 	if unimportantState.CurrentRole == nodestate.Candidate && voteResponse.Term == importantState.CurrentTerm && voteResponse.Granted {
 		unimportantState.VotesRecieved[voterId] = struct{}{}
+		fmt.Println("new len(unimportantState.VotesRecieved):", len(unimportantState.VotesRecieved))
 		if len(unimportantState.VotesRecieved) >= (len(allNodes)+1)/2 {
 			unimportantState.CurrentRole = nodestate.Leader
 			unimportantState.CurrentLeader = nodeId
@@ -382,7 +413,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("Received vote response: %+v\n", logRequest)
 
-	leaderId := r.RemoteAddr
+	leaderId := logRequest.SenderAddress
 	mutex.Lock()
 	if logRequest.Term > importantState.CurrentTerm {
 		importantState.CurrentTerm = logRequest.Term
@@ -399,12 +430,10 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if logRequest.Term == importantState.CurrentTerm && logOk {
 		AppendEntries(logRequest.LogLength, logRequest.LeaderCommit, logRequest.Entries)
 		ack := logRequest.LogLength + len(logRequest.Entries)
-		requests.SendLogResponse(leaderId, importantState.CurrentTerm, ack, true)
+		requests.SendLogResponse(nodeId, leaderId, importantState.CurrentTerm, ack, true, &mutex)
 	} else {
-		requests.SendLogResponse(leaderId, importantState.CurrentTerm, 0, false)
+		requests.SendLogResponse(nodeId, leaderId, importantState.CurrentTerm, 0, false, &mutex)
 	}
-
-	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -455,7 +484,7 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Printf("Received vote response: %+v\n", logResponse)
 
-	follower := r.RemoteAddr
+	follower := logResponse.SenderAddress
 	mutex.Lock()
 	if logResponse.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Leader {
 		if logResponse.Success && logResponse.Ack >= unimportantState.AckedLength[follower] {
