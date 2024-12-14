@@ -49,7 +49,12 @@ class T(unittest.TestCase):
         _, value = client.read("key2")
         assert value == "value10"
 
-        # client.delete("")
+        client.delete("key1")
+        code, value = client.read("key1")
+        assert code == 404
+        assert value == ""
+        _, value = client.read("key2")
+        assert value == "value10"
 
 
 if __name__ == "__main__":
