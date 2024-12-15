@@ -92,13 +92,6 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	}()
 }
 
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func CheckLeaderFailurePeriodically() {
 	time.Sleep(suspectLeaderFailureTimeout)
 	for {
@@ -152,7 +145,7 @@ func deliverMessage(i int) {
 	fmt.Println("DELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
 }
 
-func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) {
+func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { // mutex must be locked
 	if len(entries) > 0 && len(importantState.Log) > logLength {
 		if importantState.Log[logLength].Term != entries[0].Term {
 			importantState.Log = importantState.Log[:logLength]
