@@ -51,6 +51,15 @@ class T(unittest.TestCase):
         assert RaftClient(node2).read("key1") == (404, "")
         assert RaftClient(node3).read("key1") == (404, "")
 
+        RaftClient(node2).stop()
+        RaftClient(node1).update("key1", "value2")
+        time.sleep(2)
+        RaftClient(node1).read("key1") == (200, "value2")
+        RaftClient(node2).recover()
+        RaftClient(node2).read("key1") == (200, "value1")
+        time.sleep(1)
+        RaftClient(node2).read("key1") == (200, "value2")
+
 
 if __name__ == "__main__":
     unittest.main()
