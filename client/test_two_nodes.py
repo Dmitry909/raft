@@ -44,6 +44,7 @@ class T(unittest.TestCase):
         assert RaftClient(node3).current_role() == "follower"
 
         RaftClient(node1).stop()
+        print("node1 stopped")
         time.sleep(2.1)
         assert {RaftClient(node2).current_role(), RaftClient(node3).current_role()} == {"leader", "follower"}
 

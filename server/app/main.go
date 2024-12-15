@@ -43,7 +43,7 @@ func init() {
 
 	num, _ := strconv.Atoi(os.Args[3])
 	suspectLeaderFailureTimeout = time.Duration(num) * time.Millisecond
-	fmt.Println(nodeId, ":", "suspect timeout:", suspectLeaderFailureTimeout)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "suspect timeout:", suspectLeaderFailureTimeout)
 	electionTimeout = suspectLeaderFailureTimeout / 4
 	replicateTimeout = suspectLeaderFailureTimeout / 4
 }
@@ -52,9 +52,9 @@ var importantState nodestate.ImportantState
 var unimportantState nodestate.UnimportantState
 var mutex sync.Mutex
 
-func BecomeCandidateAndStartElection() { // mutex must be locked
-	fmt.Println(nodeId, ":", "Called BecomeCandidateAndStartElection")
-	importantState.CurrentTerm += 1
+func BecomeCandidateAndStartElection(termAdd int) { // mutex must be locked
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "Called BecomeCandidateAndStartElection")
+	importantState.CurrentTerm += termAdd
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
 	unimportantState.VotesRecieved = make(map[string]struct{})
@@ -75,7 +75,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	mutex.Unlock()
 
 	for _, node := range allNodes {
-		fmt.Println(nodeId, ":", "\tSending vote request to", node)
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tSending vote request to", node)
 		requests.SendVoteRequest(nodeId, node, termBeforeElection, logLength, lastTerm)
 	}
 
@@ -85,7 +85,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 		mutex.Lock()
 		if unimportantState.ElectionIteration == electionIterationBefore && importantState.CurrentTerm == termBeforeElection && unimportantState.CurrentRole == nodestate.Candidate {
 			// mutex must be locked before call
-			BecomeCandidateAndStartElection()
+			BecomeCandidateAndStartElection(0)
 		} else {
 			mutex.Unlock()
 		}
@@ -95,21 +95,26 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 func CheckLeaderFailurePeriodically() {
 	time.Sleep(suspectLeaderFailureTimeout)
 	for {
-		fmt.Println(nodeId, ":", "CheckLeaderFailurePeriodically")
 		mutex.Lock()
+		if unimportantState.IsStopped {
+			mutex.Unlock()
+			time.Sleep(suspectLeaderFailureTimeout / 10)
+			continue
+		}
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "CheckLeaderFailurePeriodically")
 		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower // && unimportantState.CurrentLeader != ""
 		lastHeartbeat := unimportantState.LastHeartbeat
-		// fmt.Println(nodeId, ":", "\t", isReallyFollower, lastHeartbeat)
+		// fmt.Println(nodeId, time.Now().UnixNano() / int64(time.Millisecond), ":", "\t", isReallyFollower, lastHeartbeat)
 		suspectFailure := lastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
 
 		if isReallyFollower && suspectFailure {
-			fmt.Println(nodeId, ":", "\tsuspected leader failure at", time.Now())
-			BecomeCandidateAndStartElection()
+			fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tsuspected leader failure at", time.Now())
+			BecomeCandidateAndStartElection(1)
 		} else {
 			mutex.Unlock()
 		}
 
-		// fmt.Println(nodeId, ":", "\tisReallyFollower:", isReallyFollower)
+		// fmt.Println(nodeId, time.Now().UnixNano() / int64(time.Millisecond), ":", "\tisReallyFollower:", isReallyFollower)
 		if isReallyFollower {
 			time.Sleep(time.Until(lastHeartbeat.Add(suspectLeaderFailureTimeout)))
 		} else {
@@ -132,6 +137,11 @@ func ReplicateLog(leaderId string, followerId string) { // mutex must be UNlocke
 func ReplicateLogPeriodically() {
 	for {
 		mutex.Lock()
+		if unimportantState.IsStopped {
+			mutex.Unlock()
+			time.Sleep(replicateTimeout / 10)
+			continue
+		}
 		if unimportantState.CurrentRole == nodestate.Leader {
 			mutex.Unlock()
 			for _, follower := range nodesExceptMe {
@@ -145,7 +155,7 @@ func ReplicateLogPeriodically() {
 }
 
 func deliverMessage(i int) {
-	fmt.Println(nodeId, ":", "\tDELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tDELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
 }
 
 func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { // mutex must be locked
@@ -169,9 +179,9 @@ func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { 
 }
 
 func readHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(nodeId, ":", "readHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "readHandler called")
 	key := r.URL.Query().Get("key")
-	fmt.Println(nodeId, ":", "\tkey=", key)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tkey=", key)
 	if key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
@@ -197,11 +207,6 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if unimportantState.IsStopped {
-		mutex.Unlock()
-		http.Error(w, "node is stopped", http.StatusForbidden)
-		return
-	}
 	mutex.Unlock()
 	if value == "" {
 		http.Error(w, "key not found", http.StatusNotFound)
@@ -217,7 +222,7 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(nodeId, ":", "updateHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "updateHandler called")
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -232,7 +237,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("%s : \tReceived update request: %+v\n", nodeId, request)
+	fmt.Printf("%s %d : \tReceived update request: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), request)
 
 	if request.Key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
@@ -291,7 +296,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(nodeId, ":", "voteRequestHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "voteRequestHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -305,12 +310,12 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("%s : \tReceived vote request: %+v\n", nodeId, c)
+	fmt.Printf("%s %d : \tReceived vote request: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), c)
 
 	cId := c.SenderAddress
 	mutex.Lock()
 	if cId == nodeId {
-		fmt.Println(nodeId, ":", "\tcId == nodeId, vote for myself")
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tcId == nodeId, vote for myself")
 		currentTerm := importantState.CurrentTerm
 		mutex.Unlock()
 		requests.SendVoteResponse(nodeId, cId, currentTerm, true, nil)
@@ -348,7 +353,7 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(nodeId, ":", "voteResponseHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "voteResponseHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -362,10 +367,10 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("%s : \tReceived vote response: %+v\n", nodeId, voteResponse)
+	fmt.Printf("%s %d : \tReceived vote response: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), voteResponse)
 
 	voterId := voteResponse.SenderAddress
-	fmt.Println(nodeId, ":", "\tvoterId: ", voterId)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tvoterId: ", voterId)
 	mutex.Lock()
 	if unimportantState.IsStopped {
 		mutex.Unlock()
@@ -373,11 +378,11 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println(nodeId, ":", "\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
-	fmt.Println(nodeId, ":", "\t", voteResponse.Term, importantState.CurrentTerm)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\t", voteResponse.Term, importantState.CurrentTerm)
 	if unimportantState.CurrentRole == nodestate.Candidate && voteResponse.Term == importantState.CurrentTerm && voteResponse.Granted {
 		unimportantState.VotesRecieved[voterId] = struct{}{}
-		fmt.Println(nodeId, ":", "\tnew len(unimportantState.VotesRecieved):", len(unimportantState.VotesRecieved))
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tnew len(unimportantState.VotesRecieved):", len(unimportantState.VotesRecieved))
 		if len(unimportantState.VotesRecieved) >= (len(allNodes)+1)/2 {
 			unimportantState.CurrentRole = nodestate.Leader
 			unimportantState.CurrentLeader = nodeId
@@ -407,7 +412,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logRequestHandler(w http.ResponseWriter, r *http.Request) {
-	// fmt.Println(nodeId, ":", "logRequestHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "logRequestHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -421,7 +426,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	// fmt.Printf("%s : \tReceived log request: %+v\n", nodeId, logRequest)
+	fmt.Printf("%s %d : \tReceived log request: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), logRequest)
 
 	leaderId := logRequest.SenderAddress
 	mutex.Lock()
@@ -437,6 +442,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.VotedFor = ""
 		unimportantState.CurrentRole = nodestate.Follower
 		unimportantState.CurrentLeader = leaderId
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), "Updated: importantState.CurrentTerm:", importantState.CurrentTerm, ", unimportantState.CurrentLeader:", unimportantState.CurrentLeader, ", unimportantState.LastHeartbeat:", unimportantState.LastHeartbeat)
 		importantState.SaveToFile(port)
 	}
 	if logRequest.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Candidate {
@@ -501,7 +507,7 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	// fmt.Printf("%s : Received log response: %+v\n", nodeId, logResponse)
+	fmt.Printf("%s %d : Received log response: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), logResponse)
 
 	follower := logResponse.SenderAddress
 	mutex.Lock()
@@ -566,30 +572,30 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func recoverHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(nodeId, ":", "recoverHandler called")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "recoverHandler called")
 	mutex.Lock()
 	unimportantState.IsStopped = false
 	if nodestate.CheckStateOnDisk(port) {
 		importantState.LoadFromFile(port)
-		fmt.Printf("%s : \tstate recovered after crash: %+v\n", nodeId, importantState)
+		fmt.Printf("%s %d : \tstate recovered after crash: %+v\n", nodeId, time.Now().UnixNano()/int64(time.Millisecond), importantState)
 	} else {
 		importantState.CurrentTerm = 0
 		importantState.VotedFor = ""
 		importantState.Log = nil
 		importantState.CommitLength = 0
-		fmt.Println(nodeId, ":", "\tinitialized new state")
+		fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "\tinitialized new state")
 	}
 	mutex.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
-	fmt.Println(nodeId, ":", "nodeId:", nodeId)
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "nodeId:", nodeId)
 	importantState.CurrentTerm = 0
 	importantState.VotedFor = ""
 	importantState.Log = nil
 	importantState.CommitLength = 0
-	fmt.Println(nodeId, ":", "initialized new state")
+	fmt.Println(nodeId, time.Now().UnixNano()/int64(time.Millisecond), ":", "initialized new state")
 
 	unimportantState.CurrentRole = nodestate.Follower
 	unimportantState.CurrentLeader = ""
