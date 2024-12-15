@@ -44,8 +44,8 @@ func init() {
 	num, _ := strconv.Atoi(os.Args[3])
 	suspectLeaderFailureTimeout = time.Duration(num) * time.Millisecond
 	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
-	electionTimeout = 2 * suspectLeaderFailureTimeout
-	replicateTimeout = 2 * suspectLeaderFailureTimeout
+	electionTimeout = suspectLeaderFailureTimeout / 4
+	replicateTimeout = suspectLeaderFailureTimeout / 4
 }
 
 var importantState nodestate.ImportantState
@@ -164,6 +164,7 @@ func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { 
 		}
 		importantState.CommitLength = leaderCommit
 	}
+	importantState.SaveToFile(port)
 }
 
 func readHandler(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +251,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: request.Key, V: request.Value}
 	importantState.Log = append(importantState.Log, newEntry)
+	importantState.SaveToFile(port)
 	unimportantState.AckedLength[nodeId] = len(importantState.Log)
 	mutex.Unlock()
 	for _, follower := range nodesExceptMe {
@@ -280,6 +282,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Delete, K: key, V: ""}
 	importantState.Log = append(importantState.Log, newEntry)
+	importantState.SaveToFile(port)
 	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
@@ -343,10 +346,8 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.CurrentTerm = c.Term
 		unimportantState.CurrentRole = nodestate.Follower
 		importantState.VotedFor = cId
-		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, &mutex)
-		mutex.Lock()
 		importantState.SaveToFile(port)
-		mutex.Unlock()
+		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, &mutex)
 	} else {
 		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, false, &mutex)
 	}
@@ -442,6 +443,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.VotedFor = ""
 		unimportantState.CurrentRole = nodestate.Follower
 		unimportantState.CurrentLeader = leaderId
+		importantState.SaveToFile(port)
 	}
 	if logRequest.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Candidate {
 		unimportantState.CurrentRole = nodestate.Follower
@@ -487,6 +489,7 @@ func CommitLogEntries() { // mutex must be locked
 			deliverMessage(i)
 		}
 		importantState.CommitLength = maxReady
+		importantState.SaveToFile(port)
 	}
 }
 
@@ -527,6 +530,7 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 		importantState.CurrentTerm = logResponse.Term
 		unimportantState.CurrentRole = nodestate.Follower
 		importantState.VotedFor = ""
+		importantState.SaveToFile(port)
 	}
 	mutex.Unlock()
 
@@ -591,7 +595,6 @@ func main() {
 	importantState.Log = nil
 	importantState.CommitLength = 0
 	fmt.Println("initialized new state")
-	importantState.SaveToFile(port)
 
 	unimportantState.CurrentRole = nodestate.Follower
 	unimportantState.CurrentLeader = ""
