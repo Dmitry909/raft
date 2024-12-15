@@ -43,7 +43,7 @@ func init() {
 
 	num, _ := strconv.Atoi(os.Args[3])
 	suspectLeaderFailureTimeout = time.Duration(num) * time.Millisecond
-	fmt.Println("suspect timeout:", suspectLeaderFailureTimeout)
+	fmt.Println(nodeId, ":", "suspect timeout:", suspectLeaderFailureTimeout)
 	electionTimeout = suspectLeaderFailureTimeout / 4
 	replicateTimeout = suspectLeaderFailureTimeout / 4
 }
@@ -53,7 +53,7 @@ var unimportantState nodestate.UnimportantState
 var mutex sync.Mutex
 
 func BecomeCandidateAndStartElection() { // mutex must be locked
-	fmt.Println("Called BecomeCandidateAndStartElection")
+	fmt.Println(nodeId, ":", "Called BecomeCandidateAndStartElection")
 	importantState.CurrentTerm += 1
 	unimportantState.CurrentRole = nodestate.Candidate
 	importantState.VotedFor = nodeId
@@ -75,7 +75,7 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 	mutex.Unlock()
 
 	for _, node := range allNodes {
-		fmt.Println("Sending vote request to", node)
+		fmt.Println(nodeId, ":", "\tSending vote request to", node)
 		requests.SendVoteRequest(nodeId, node, termBeforeElection, logLength, lastTerm)
 	}
 
@@ -95,20 +95,21 @@ func BecomeCandidateAndStartElection() { // mutex must be locked
 func CheckLeaderFailurePeriodically() {
 	time.Sleep(suspectLeaderFailureTimeout)
 	for {
+		fmt.Println(nodeId, ":", "CheckLeaderFailurePeriodically")
 		mutex.Lock()
 		isReallyFollower := unimportantState.CurrentRole == nodestate.Follower // && unimportantState.CurrentLeader != ""
 		lastHeartbeat := unimportantState.LastHeartbeat
-		fmt.Println(isReallyFollower, lastHeartbeat)
+		// fmt.Println(nodeId, ":", "\t", isReallyFollower, lastHeartbeat)
 		suspectFailure := lastHeartbeat.Add(suspectLeaderFailureTimeout).Before(time.Now())
 
 		if isReallyFollower && suspectFailure {
-			fmt.Println("suspected leader failure at", time.Now())
+			fmt.Println(nodeId, ":", "\tsuspected leader failure at", time.Now())
 			BecomeCandidateAndStartElection()
 		} else {
 			mutex.Unlock()
 		}
 
-		// fmt.Println("isReallyFollower:", isReallyFollower)
+		// fmt.Println(nodeId, ":", "\tisReallyFollower:", isReallyFollower)
 		if isReallyFollower {
 			time.Sleep(time.Until(lastHeartbeat.Add(suspectLeaderFailureTimeout)))
 		} else {
@@ -144,7 +145,7 @@ func ReplicateLogPeriodically() {
 }
 
 func deliverMessage(i int) {
-	fmt.Println("DELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
+	fmt.Println(nodeId, ":", "\tDELIVERING MESSAGE. key:", importantState.Log[i].K, ", value:", importantState.Log[i].V)
 }
 
 func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { // mutex must be locked
@@ -168,9 +169,9 @@ func AppendEntries(logLength, leaderCommit int, entries []nodestate.LogEntry) { 
 }
 
 func readHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("readHandler called")
+	fmt.Println(nodeId, ":", "readHandler called")
 	key := r.URL.Query().Get("key")
-	fmt.Println("\tkey=", key)
+	fmt.Println(nodeId, ":", "\tkey=", key)
 	if key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
 		return
@@ -196,11 +197,12 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	mutex.Unlock()
 	if unimportantState.IsStopped {
+		mutex.Unlock()
 		http.Error(w, "node is stopped", http.StatusForbidden)
 		return
 	}
+	mutex.Unlock()
 	if value == "" {
 		http.Error(w, "key not found", http.StatusNotFound)
 		return
@@ -215,7 +217,7 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("updateHandler called")
+	fmt.Println(nodeId, ":", "updateHandler called")
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -230,7 +232,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received update request: %+v\n", request)
+	fmt.Printf("%s : \tReceived update request: %+v\n", nodeId, request)
 
 	if request.Key == "" {
 		http.Error(w, "key is required", http.StatusBadRequest)
@@ -288,21 +290,8 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// TODO вроде хартбиты не нужны, их заменяет log_request.
-// func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
-// 	heartbeatSender := .SenderAddress
-// 	time := time.Now()
-// 	fmt.Println("heartbeat recieved from", heartbeatSender, "at", time)
-// 	mutex.Lock()
-// 	if heartbeatSender == unimportantState.CurrentLeader {
-// 		unimportantState.LastHeartbeat = time
-// 	}
-// 	mutex.Unlock()
-// 	w.WriteHeader(http.StatusOK)
-// }
-
 func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("voteRequestHandler called")
+	fmt.Println(nodeId, ":", "voteRequestHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -316,17 +305,19 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote request: %+v\n", c)
+	fmt.Printf("%s : \tReceived vote request: %+v\n", nodeId, c)
 
 	cId := c.SenderAddress
+	mutex.Lock()
 	if cId == nodeId {
-		fmt.Println("\tcId == nodeId, vote for myself")
-		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, nil)
+		fmt.Println(nodeId, ":", "\tcId == nodeId, vote for myself")
+		currentTerm := importantState.CurrentTerm
+		mutex.Unlock()
+		requests.SendVoteResponse(nodeId, cId, currentTerm, true, nil)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	mutex.Lock()
 	if unimportantState.IsStopped {
 		mutex.Unlock()
 		http.Error(w, "node is stopped", http.StatusForbidden)
@@ -345,6 +336,7 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if logOk && termOk {
 		importantState.CurrentTerm = c.Term
 		unimportantState.CurrentRole = nodestate.Follower
+		unimportantState.LastHeartbeat = time.Now()
 		importantState.VotedFor = cId
 		importantState.SaveToFile(port)
 		requests.SendVoteResponse(nodeId, cId, importantState.CurrentTerm, true, &mutex)
@@ -356,7 +348,7 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("voteResponseHandler called")
+	fmt.Println(nodeId, ":", "voteResponseHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -370,10 +362,10 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote response: %+v\n", voteResponse)
+	fmt.Printf("%s : \tReceived vote response: %+v\n", nodeId, voteResponse)
 
 	voterId := voteResponse.SenderAddress
-	fmt.Println("\tvoterId: ", voterId)
+	fmt.Println(nodeId, ":", "\tvoterId: ", voterId)
 	mutex.Lock()
 	if unimportantState.IsStopped {
 		mutex.Unlock()
@@ -381,11 +373,11 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println("\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
-	fmt.Println("\t", voteResponse.Term, importantState.CurrentTerm)
+	fmt.Println(nodeId, ":", "\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
+	fmt.Println(nodeId, ":", "\t", voteResponse.Term, importantState.CurrentTerm)
 	if unimportantState.CurrentRole == nodestate.Candidate && voteResponse.Term == importantState.CurrentTerm && voteResponse.Granted {
 		unimportantState.VotesRecieved[voterId] = struct{}{}
-		fmt.Println("new len(unimportantState.VotesRecieved):", len(unimportantState.VotesRecieved))
+		fmt.Println(nodeId, ":", "\tnew len(unimportantState.VotesRecieved):", len(unimportantState.VotesRecieved))
 		if len(unimportantState.VotesRecieved) >= (len(allNodes)+1)/2 {
 			unimportantState.CurrentRole = nodestate.Leader
 			unimportantState.CurrentLeader = nodeId
@@ -415,6 +407,7 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logRequestHandler(w http.ResponseWriter, r *http.Request) {
+	// fmt.Println(nodeId, ":", "logRequestHandler called")
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -428,7 +421,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote response: %+v\n", logRequest)
+	// fmt.Printf("%s : \tReceived log request: %+v\n", nodeId, logRequest)
 
 	leaderId := logRequest.SenderAddress
 	mutex.Lock()
@@ -438,6 +431,7 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	unimportantState.LastHeartbeat = time.Now()
 	if logRequest.Term > importantState.CurrentTerm {
 		importantState.CurrentTerm = logRequest.Term
 		importantState.VotedFor = ""
@@ -507,7 +501,7 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
-	fmt.Printf("Received vote response: %+v\n", logResponse)
+	// fmt.Printf("%s : Received log response: %+v\n", nodeId, logResponse)
 
 	follower := logResponse.SenderAddress
 	mutex.Lock()
@@ -572,29 +566,30 @@ func stopHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func recoverHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(nodeId, ":", "recoverHandler called")
 	mutex.Lock()
 	unimportantState.IsStopped = false
 	if nodestate.CheckStateOnDisk(port) {
 		importantState.LoadFromFile(port)
-		fmt.Printf("state recovered after crash: %+v\n", importantState)
+		fmt.Printf("%s : \tstate recovered after crash: %+v\n", nodeId, importantState)
 	} else {
 		importantState.CurrentTerm = 0
 		importantState.VotedFor = ""
 		importantState.Log = nil
 		importantState.CommitLength = 0
-		fmt.Println("initialized new state")
+		fmt.Println(nodeId, ":", "\tinitialized new state")
 	}
 	mutex.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
-	fmt.Println("nodeId:", nodeId)
+	fmt.Println(nodeId, ":", "nodeId:", nodeId)
 	importantState.CurrentTerm = 0
 	importantState.VotedFor = ""
 	importantState.Log = nil
 	importantState.CommitLength = 0
-	fmt.Println("initialized new state")
+	fmt.Println(nodeId, ":", "initialized new state")
 
 	unimportantState.CurrentRole = nodestate.Follower
 	unimportantState.CurrentLeader = ""
