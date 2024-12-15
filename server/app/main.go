@@ -117,7 +117,7 @@ func CheckLeaderFailurePeriodically() {
 	}
 }
 
-func ReplicateLog(leaderId string, followerId string) {
+func ReplicateLog(leaderId string, followerId string) { // mutex must be UNlocked
 	mutex.Lock()
 	i := unimportantState.SentLength[followerId]
 	entries := importantState.Log[i:]
@@ -190,7 +190,6 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	mutex.Unlock()
 	if unimportantState.IsStopped {
-		mutex.Unlock()
 		http.Error(w, "node is stopped", http.StatusForbidden)
 		return
 	}
@@ -245,10 +244,10 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	newEntry := nodestate.LogEntry{Term: importantState.CurrentTerm, OperatType: nodestate.Write, K: request.Key, V: request.Value}
 	importantState.Log = append(importantState.Log, newEntry)
 	unimportantState.AckedLength[nodeId] = len(importantState.Log)
+	mutex.Unlock()
 	for _, follower := range nodesExceptMe {
 		ReplicateLog(nodeId, follower)
 	}
-	mutex.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -450,7 +449,7 @@ func findMaxReady(minAcks int) int {
 	return -1
 }
 
-func CommitLogEntries() {
+func CommitLogEntries() { // mutex must be locked
 	minAcks := (len(allNodes) + 2) / 2 // TODO точно +2? (+1 просто + округлуние вверх, поэтому еще +1). Короче зависит от того, учитываем ли себя
 	maxReady := findMaxReady(minAcks)
 	if maxReady > importantState.CommitLength && importantState.Log[maxReady-1].Term == importantState.CurrentTerm {
