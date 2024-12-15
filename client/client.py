@@ -6,7 +6,7 @@ class RaftClient:
 
     def read(self, key):
         response = requests.get(self.node + "/read?key=" + key)
-        if response.status_code != 200 and response.status_code != 404:
+        if response.status_code != 200 and response.status_code != 404 and response.status_code != 403:
             raise Exception("read failed")
         if response.status_code == 200:
             assert "value" in response.json()
@@ -20,13 +20,11 @@ class RaftClient:
             "value": value
         }
         response = requests.post(self.node + "/update", json=data)
-        if response.status_code != 200:
-            raise Exception("update failed")
+        return response.status_code
 
     def delete(self, key):
         response = requests.delete(self.node + "/delete?key=" + key)
-        if response.status_code != 200:
-            raise Exception("delete failed")
+        return response.status_code
 
     def current_role(self):
         response = requests.get(self.node + "/current_role")

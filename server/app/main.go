@@ -176,6 +176,11 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 	// if unimportantState.CurrentRole == nodestate.Leader {
 	// 	mutex.Unlock()
 	// 	randomNode := nodesExceptMe[rand.Intn(len(nodesExceptMe))]
@@ -317,7 +322,14 @@ func voteRequestHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
+
 	myLogTerm := 0
 	if n := len(importantState.Log); n > 0 {
 		myLogTerm = importantState.Log[n-1].Term
@@ -362,6 +374,11 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 	voterId := voteResponse.SenderAddress
 	fmt.Println("\tvoterId: ", voterId)
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 
 	fmt.Println("\tunimportantState.CurrentRole:", unimportantState.CurrentRole)
 	fmt.Println("\t", voteResponse.Term, importantState.CurrentTerm)
@@ -414,6 +431,12 @@ func logRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	leaderId := logRequest.SenderAddress
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
+
 	if logRequest.Term > importantState.CurrentTerm {
 		importantState.CurrentTerm = logRequest.Term
 		importantState.VotedFor = ""
@@ -485,6 +508,12 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 
 	follower := logResponse.SenderAddress
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
+
 	if logResponse.Term == importantState.CurrentTerm && unimportantState.CurrentRole == nodestate.Leader {
 		if logResponse.Success && logResponse.Ack >= unimportantState.AckedLength[follower] {
 			unimportantState.SentLength[follower] = logResponse.Ack
@@ -506,6 +535,11 @@ func logResponseHandler(w http.ResponseWriter, r *http.Request) {
 
 func currentRoleHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
+	if unimportantState.IsStopped {
+		mutex.Unlock()
+		http.Error(w, "node is stopped", http.StatusForbidden)
+		return
+	}
 	currentRole := unimportantState.CurrentRole
 	mutex.Unlock()
 
