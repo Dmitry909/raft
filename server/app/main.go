@@ -132,11 +132,13 @@ func ReplicateLogPeriodically() {
 	for {
 		mutex.Lock()
 		if unimportantState.CurrentRole == nodestate.Leader {
+			mutex.Unlock()
 			for _, follower := range nodesExceptMe {
 				ReplicateLog(nodeId, follower)
 			}
+		} else {
+			mutex.Unlock()
 		}
-		mutex.Unlock()
 		time.Sleep(replicateTimeout)
 	}
 }
@@ -373,8 +375,13 @@ func voteResponseHandler(w http.ResponseWriter, r *http.Request) {
 			for _, follower := range nodesExceptMe {
 				unimportantState.SentLength[follower] = len(importantState.Log)
 				unimportantState.AckedLength[follower] = 0
+			}
+			mutex.Unlock()
+			for _, follower := range nodesExceptMe {
 				ReplicateLog(nodeId, follower)
 			}
+			w.WriteHeader(http.StatusOK)
+			return
 		} else if voteResponse.Term > importantState.CurrentTerm {
 			importantState.CurrentTerm = voteResponse.Term
 			unimportantState.CurrentRole = nodestate.Follower
@@ -561,6 +568,7 @@ func main() {
 	unimportantState.IsStopped = false
 
 	go CheckLeaderFailurePeriodically()
+	go ReplicateLogPeriodically()
 
 	// user-called handlers
 	http.HandleFunc("/read", readHandler)
